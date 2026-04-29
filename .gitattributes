@@ -1,0 +1,11 @@
+# Normalize line endings to LF in the repository; check out as-is on all platforms.
+* text=auto eol=lf
+
+# Binaries — never touch line endings.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.hdr binary
+*.glb binary
+*.fpkg binary
+*.spv binary

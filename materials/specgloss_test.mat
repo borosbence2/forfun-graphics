@@ -1,0 +1,19 @@
+material {
+    name         : specgloss_test,
+    shadingModel : specularGlossiness,
+    blendMode    : opaque,
+    requires     : [ POSITION, NORMAL, UV0 ],
+    parameters : [
+        { type : float4, name : diffuseColorFactor, default : float4(0.2, 0.2, 0.8, 1.0) },
+        { type : float3, name : specularFactor,     default : float3(0.8, 0.8, 0.8) },
+        { type : float,  name : glossinessFactor,   default : 0.85 }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs m) {
+        m.diffuseFactor = diffuseColorFactor;
+        m.specular      = specularFactor;
+        m.glossiness    = glossinessFactor;
+    }
+}

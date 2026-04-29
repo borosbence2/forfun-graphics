@@ -1,0 +1,21 @@
+material {
+    name         : sheen_test,
+    shadingModel : lit,
+    blendMode    : opaque,
+    requires     : [ POSITION, NORMAL, UV0 ],
+    parameters : [
+        { type : float4, name : baseColorFactor,  default : float4(0.1, 0.1, 0.8, 1.0) },
+        { type : float,  name : roughnessFactor,  default : 0.8 },
+        { type : float3, name : sheenColorFactor, default : float3(0.9, 0.2, 0.2) },
+        { type : float,  name : sheenRoughFactor, default : 0.4 }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs m) {
+        m.baseColor      = baseColorFactor;
+        m.roughness      = roughnessFactor;
+        m.sheenColor     = sheenColorFactor;
+        m.sheenRoughness = sheenRoughFactor;
+    }
+}

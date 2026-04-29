@@ -1,0 +1,28 @@
+material {
+    name         : DamagedHelmet,
+    shadingModel : lit,
+    blendMode    : opaque,
+    requires     : [ POSITION, NORMAL, UV0 ],
+    parameters : [
+        { type : float4, name : baseColorFactor,  default : float4(1.0, 1.0, 1.0, 1.0) },
+        { type : float,  name : metallicFactor,   default : 1.0 },
+        { type : float,  name : roughnessFactor,  default : 1.0 }
+    ],
+    samplers : [
+        { type : sampler2d_srgb, name : baseColorMap         },
+        { type : sampler2d,      name : metallicRoughnessMap },
+        { type : sampler2d,      name : normalMap            }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs m) {
+        vec4 albedo  = texture(baseColorMap, getUV0());
+        m.baseColor  = albedo * baseColorFactor;
+        vec4 mr      = texture(metallicRoughnessMap, getUV0());
+        m.metallic   = mr.b * metallicFactor;
+        m.roughness  = mr.g * roughnessFactor;
+        m.normal     = texture(normalMap, getUV0()).xyz * 2.0 - 1.0;
+        m.ao         = mr.r;
+    }
+}

@@ -1,0 +1,80 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform samplerCube envCube;
+layout(set = 0, binding = 1, std430) buffer SHBuffer { vec4 coeffs[9]; } shOut;
+
+shared vec3 sdata[9][256];
+
+const uint  N_TOTAL = 32768u;  // 256 threads * 128 samples each
+const float TWO_PI  = 6.28318530718;
+
+float radicalInverse(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+
+vec3 sphereDir(uint i) {
+    float phi      = TWO_PI * float(i) / float(N_TOTAL);
+    float cosTheta = 1.0 - 2.0 * radicalInverse(i);
+    float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
+    return vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+}
+
+void main() {
+    uint tid = gl_LocalInvocationIndex;
+
+    for (int j = 0; j < 9; j++) sdata[j][tid] = vec3(0.0);
+
+    for (uint i = 0u; i < 128u; i++) {
+        vec3  d = sphereDir(tid * 128u + i);
+        vec3  L = textureLod(envCube, d, 0.0).rgb;
+        float x = d.x, y = d.y, z = d.z;
+
+        sdata[0][tid] += L;
+        sdata[1][tid] += L * y;
+        sdata[2][tid] += L * z;
+        sdata[3][tid] += L * x;
+        sdata[4][tid] += L * x * y;
+        sdata[5][tid] += L * y * z;
+        sdata[6][tid] += L * (3.0 * z * z - 1.0);
+        sdata[7][tid] += L * x * z;
+        sdata[8][tid] += L * (x * x - y * y);
+    }
+
+    barrier();
+
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            for (int j = 0; j < 9; j++)
+                sdata[j][tid] += sdata[j][tid + s];
+        }
+        barrier();
+    }
+
+    if (tid == 0u) {
+        // Pre-multiply by A_l (irradiance transfer) * K_j^2 (SH normalization squared)
+        // so evaluation is just: E(N) = sum_j coeffs[j].rgb * raw_poly_j(N)
+        // Scale factors: A_l * K_j^2 for each band:
+        //   band 0: pi * (1/2sqrt(pi))^2     = 1/4
+        //   band 1: 2pi/3 * 3/(4pi)          = 1/2
+        //   band 2, |m|=1: pi/4 * 15/(4pi)  = 15/16
+        //   band 2, m=0:   pi/4 * 5/(16pi)  = 5/64
+        //   band 2, |m|=2: pi/4 * 15/(16pi) = 15/64
+        float w = (4.0 * 3.14159265359) / float(N_TOTAL);
+        shOut.coeffs[0] = vec4(sdata[0][0] * (w * 0.25),          0.0);
+        shOut.coeffs[1] = vec4(sdata[1][0] * (w * 0.5),           0.0);
+        shOut.coeffs[2] = vec4(sdata[2][0] * (w * 0.5),           0.0);
+        shOut.coeffs[3] = vec4(sdata[3][0] * (w * 0.5),           0.0);
+        shOut.coeffs[4] = vec4(sdata[4][0] * (w * 15.0 / 16.0),   0.0);
+        shOut.coeffs[5] = vec4(sdata[5][0] * (w * 15.0 / 16.0),   0.0);
+        shOut.coeffs[6] = vec4(sdata[6][0] * (w *  5.0 / 64.0),   0.0);
+        shOut.coeffs[7] = vec4(sdata[7][0] * (w * 15.0 / 16.0),   0.0);
+        shOut.coeffs[8] = vec4(sdata[8][0] * (w * 15.0 / 64.0),   0.0);
+    }
+}

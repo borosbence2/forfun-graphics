@@ -1,0 +1,33 @@
+# Internal design docs (not for public)
+docs/
+
+# Build directories
+build/
+out/
+bin/
+.cache/
+
+# IDEs
+.vs/
+.vscode/
+*.user
+*.sln
+*.vcxproj*
+
+# Project specific assets (downloaded via CMake)
+assets/
+materials/*.fpkg
+mat_cache/
+
+# Generated files
+generated/
+
+# Claude Code local settings
+.claude/
+
+# ImGui runtime layout (user-specific, regenerated each session)
+imgui.ini
+
+# System files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,23 @@
+material {
+    name         : refraction_test,
+    shadingModel : lit,
+    blendMode    : opaque,
+    requires     : [ POSITION, NORMAL, UV0 ],
+    parameters : [
+        { type : float4, name : baseColorFactor,    default : float4(0.9, 0.95, 1.0, 1.0) },
+        { type : float,  name : roughnessFactor,    default : 0.05 },
+        { type : float,  name : transmissionFactor, default : 0.9 },
+        { type : float,  name : iorValue,           default : 1.5 },
+        { type : float,  name : thicknessValue,     default : 0.5 }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs m) {
+        m.baseColor    = baseColorFactor;
+        m.roughness    = roughnessFactor;
+        m.transmission = transmissionFactor;
+        m.ior          = iorValue;
+        m.thickness    = thicknessValue;
+    }
+}

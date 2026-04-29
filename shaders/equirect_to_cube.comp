@@ -1,0 +1,41 @@
+#version 450
+
+// One dispatch over (cubeSize, cubeSize, 6). Each invocation samples the
+// equirect HDR for its face/UV's world direction and writes a single texel
+// of the destination cubemap (viewed as a 2D array of 6 layers).
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D     equirect;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray cubeOut;
+
+const float PI = 3.14159265359;
+
+vec3 dirFromFaceUV(uint face, vec2 uv) {
+    // uv in [0,1]; t in [-1,1] across the face.
+    vec2 t = uv * 2.0 - 1.0;
+    if      (face == 0u) return normalize(vec3( 1.0, -t.y, -t.x));  // +X
+    else if (face == 1u) return normalize(vec3(-1.0, -t.y,  t.x));  // -X
+    else if (face == 2u) return normalize(vec3( t.x,  1.0,  t.y));  // +Y
+    else if (face == 3u) return normalize(vec3( t.x, -1.0, -t.y));  // -Y
+    else if (face == 4u) return normalize(vec3( t.x, -t.y,  1.0));  // +Z
+    else                 return normalize(vec3(-t.x, -t.y, -1.0));  // -Z
+}
+
+vec2 dirToEquirect(vec3 d) {
+    float u = atan(d.z, d.x) / (2.0 * PI) + 0.5;
+    float v = 0.5 - asin(clamp(d.y, -1.0, 1.0)) / PI;
+    return vec2(u, v);
+}
+
+void main() {
+    ivec3 dst  = ivec3(gl_GlobalInvocationID);
+    ivec2 size = imageSize(cubeOut).xy;
+    if (dst.x >= size.x || dst.y >= size.y) return;
+
+    vec2 uv  = (vec2(dst.xy) + 0.5) / vec2(size);
+    vec3 dir = dirFromFaceUV(uint(dst.z), uv);
+    vec3 col = texture(equirect, dirToEquirect(dir)).rgb;
+
+    imageStore(cubeOut, dst, vec4(col, 1.0));
+}

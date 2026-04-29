@@ -1,0 +1,21 @@
+material {
+    name         : anisotropy_test,
+    shadingModel : lit,
+    blendMode    : opaque,
+    requires     : [ POSITION, NORMAL, UV0 ],
+    parameters : [
+        { type : float4, name : baseColorFactor,  default : float4(0.9, 0.8, 0.2, 1.0) },
+        { type : float,  name : metallicFactor,   default : 1.0 },
+        { type : float,  name : roughnessFactor,  default : 0.3 },
+        { type : float,  name : anisotropyFactor, default : 0.7 }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs m) {
+        m.baseColor  = baseColorFactor;
+        m.metallic   = metallicFactor;
+        m.roughness  = roughnessFactor;
+        m.anisotropy = anisotropyFactor;
+    }
+}

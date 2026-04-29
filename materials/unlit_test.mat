@@ -1,0 +1,20 @@
+material {
+    name         : unlit_neon_checker,
+    shadingModel : unlit,
+    blendMode    : opaque,
+    requires     : [ POSITION, UV0 ],
+    parameters : [
+        { type : float4, name : baseColorFactor, default : float4(1.0, 1.0, 1.0, 1.0) },
+        { type : float3, name : emissiveFactor,  default : float3(0.15, 0.15, 0.15) }
+    ],
+    samplers : [
+        { type : sampler2d_srgb, name : baseColorMap }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs m) {
+        m.baseColor = texture(baseColorMap, getUV0()) * baseColorFactor;
+        m.emissive  = m.baseColor.rgb * emissiveFactor;
+    }
+}

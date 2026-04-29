@@ -1,0 +1,21 @@
+material {
+    name         : clearcoat_test,
+    shadingModel : lit,
+    blendMode    : opaque,
+    requires     : [ POSITION, NORMAL, UV0 ],
+    parameters : [
+        { type : float4, name : baseColorFactor,      default : float4(1.0, 1.0, 1.0, 1.0) },
+        { type : float,  name : roughnessFactor,      default : 0.3 },
+        { type : float,  name : clearcoatFactor,      default : 1.0 },
+        { type : float,  name : clearcoatRoughFactor, default : 0.1 }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs m) {
+        m.baseColor          = baseColorFactor;
+        m.roughness          = roughnessFactor;
+        m.clearcoat          = clearcoatFactor;
+        m.clearcoatRoughness = clearcoatRoughFactor;
+    }
+}

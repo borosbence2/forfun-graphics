@@ -1,0 +1,23 @@
+material {
+    name         : cloth_velvet,
+    shadingModel : cloth,
+    blendMode    : opaque,
+    requires     : [ POSITION, NORMAL, UV0 ],
+    parameters : [
+        { type : float,  name : roughnessFactor,       default : 0.9 },
+        { type : float3, name : sheenColorFactor,      default : float3(0.85, 0.55, 0.8) },
+        { type : float3, name : subsurfaceColorFactor, default : float3(0.18, 0.04, 0.18) }
+    ],
+    samplers : [
+        { type : sampler2d_srgb, name : baseColorMap }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs m) {
+        m.baseColor       = texture(baseColorMap, getUV0() * 4.0);
+        m.roughness       = roughnessFactor;
+        m.sheenColor      = sheenColorFactor;
+        m.subsurfaceColor = subsurfaceColorFactor;
+    }
+}

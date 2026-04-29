@@ -1,0 +1,25 @@
+material {
+    name         : subsurface_skin,
+    shadingModel : subsurface,
+    blendMode    : opaque,
+    requires     : [ POSITION, NORMAL, UV0 ],
+    parameters : [
+        { type : float,  name : roughnessFactor,       default : 0.45 },
+        { type : float3, name : subsurfaceColorFactor, default : float3(0.95, 0.3, 0.2) },
+        { type : float,  name : subsurfacePowerFactor, default : 2.5 },
+        { type : float,  name : thicknessFactor,       default : 0.35 }
+    ],
+    samplers : [
+        { type : sampler2d_srgb, name : baseColorMap }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs m) {
+        m.baseColor       = texture(baseColorMap, getUV0() * 3.0);
+        m.roughness       = roughnessFactor;
+        m.subsurfaceColor = subsurfaceColorFactor;
+        m.subsurfacePower = subsurfacePowerFactor;
+        m.thickness       = thicknessFactor;
+    }
+}
