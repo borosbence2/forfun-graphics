@@ -34,6 +34,7 @@
 #include "material.h"
 #include "material_instance.h"
 #include "device.h"
+#include "swapchain.h"
 
 #include "post.vert.h"
 #include "bloom_extract.frag.h"
@@ -191,37 +192,34 @@ int main() {
     VmaAllocator     allocator      = gpu.allocator;
 
     // ---- Swapchain ----
-    auto swapResult = vkb::SwapchainBuilder{physicalDevice, device, surface, graphicsFamily}
-        .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-        .set_desired_extent(kWindowWidth, kWindowHeight)
-        .build();
-    if (!swapResult) {
-        std::fprintf(stderr, "Swapchain: %s\n", swapResult.error().message().c_str());
-        return EXIT_FAILURE;
-    }
-    vkb::Swapchain           vkbSwapchain = swapResult.value();
-    std::vector<VkImage>     scImages     = vkbSwapchain.get_images().value();
-    std::vector<VkImageView> scViews      = vkbSwapchain.get_image_views().value();
+    forfun::Swapchain sc = forfun::createSwapchain(gpu, {
+        .desiredExtent      = {kWindowWidth, kWindowHeight},
+        .desiredFormat      = VK_FORMAT_B8G8R8A8_SRGB,
+        .desiredColorSpace  = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+        .desiredPresentMode = VK_PRESENT_MODE_FIFO_KHR,
+    });
+    // Aliases — the rest of main.cpp keeps its existing names.
+    std::vector<VkImage>&     scImages = sc.images;
+    std::vector<VkImageView>& scViews  = sc.imageViews;
 
     // ---- Depth + HDR post targets ----
     DepthImage depthImage = createDepthImage(
-        allocator, device, vkbSwapchain.extent,
+        allocator, device, sc.extent,
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
     DepthImage shadowMap = createDepthImage(
         allocator, device, {kShadowMapSize, kShadowMapSize},
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     RenderTarget hdrScene = createRenderTarget(
-        allocator, device, vkbSwapchain.extent.width, vkbSwapchain.extent.height,
+        allocator, device, sc.extent.width, sc.extent.height,
         VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     RenderTarget sceneCapture = createRenderTarget(
-        allocator, device, vkbSwapchain.extent.width, vkbSwapchain.extent.height,
+        allocator, device, sc.extent.width, sc.extent.height,
         VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     RenderTarget bloomA = createRenderTarget(
-        allocator, device, vkbSwapchain.extent.width, vkbSwapchain.extent.height,
+        allocator, device, sc.extent.width, sc.extent.height,
         VK_FORMAT_R16G16B16A16_SFLOAT);
     RenderTarget bloomB = createRenderTarget(
-        allocator, device, vkbSwapchain.extent.width, vkbSwapchain.extent.height,
+        allocator, device, sc.extent.width, sc.extent.height,
         VK_FORMAT_R16G16B16A16_SFLOAT);
 
     // ---- Transient pool for initial GPU uploads ----
@@ -485,7 +483,7 @@ int main() {
     VkPipeline bloomBlurPipeline = createFullscreenPipeline(
         device, blurLayout, bloomB.format, postVertModule, bloomBlurFragModule);
     VkPipeline compositePipeline = createFullscreenPipeline(
-        device, compositeLayout, vkbSwapchain.image_format, postVertModule, postCompositeFragModule);
+        device, compositeLayout, sc.imageFormat, postVertModule, postCompositeFragModule);
 
     VkPipeline skyboxPipeline = createSkyboxPipeline(
         device, skyboxPipelineLayout, hdrScene.format, kDepthFormat,
@@ -544,7 +542,7 @@ int main() {
     VkPipelineRenderingCreateInfoKHR imguiRenderingInfo{
         VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR};
     imguiRenderingInfo.colorAttachmentCount    = 1;
-    imguiRenderingInfo.pColorAttachmentFormats = &vkbSwapchain.image_format;
+    imguiRenderingInfo.pColorAttachmentFormats = &sc.imageFormat;
 
     ImGui_ImplVulkan_InitInfo imguiInitInfo{};
     imguiInitInfo.Instance = instance;
@@ -1055,7 +1053,7 @@ int main() {
         std::memcpy(frame.pointLightsUbo.mapped, &plData, sizeof(PointLightsUBO));
 
         uint32_t imageIndex = 0;
-        VK_CHECK(vkAcquireNextImageKHR(device, vkbSwapchain.swapchain, UINT64_MAX,
+        VK_CHECK(vkAcquireNextImageKHR(device, sc.swapchain, UINT64_MAX,
                                        frame.imageAvailable, VK_NULL_HANDLE, &imageIndex));
 
         VK_CHECK(vkResetCommandBuffer(frame.cmd, 0));
@@ -1156,7 +1154,7 @@ int main() {
         depthAttach.clearValue.depthStencil = {1.0f, 0};
 
         VkRenderingInfo renderInfo{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        renderInfo.renderArea           = {{0, 0}, vkbSwapchain.extent};
+        renderInfo.renderArea           = {{0, 0}, sc.extent};
         renderInfo.layerCount           = 1;
         renderInfo.colorAttachmentCount = 1;
         renderInfo.pColorAttachments    = &colorAttach;
@@ -1167,13 +1165,13 @@ int main() {
         VkViewport viewport{};
         viewport.x        = 0.0f;
         viewport.y        = 0.0f;
-        viewport.width    = static_cast<float>(vkbSwapchain.extent.width);
-        viewport.height   = static_cast<float>(vkbSwapchain.extent.height);
+        viewport.width    = static_cast<float>(sc.extent.width);
+        viewport.height   = static_cast<float>(sc.extent.height);
         viewport.minDepth = 0.0f;
         viewport.maxDepth = 1.0f;
         vkCmdSetViewport(frame.cmd, 0, 1, &viewport);
 
-        VkRect2D scissor{{0, 0}, vkbSwapchain.extent};
+        VkRect2D scissor{{0, 0}, sc.extent};
         vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
 
         {
@@ -1223,7 +1221,7 @@ int main() {
         bloomExtractAttach.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
 
         VkRenderingInfo bloomExtractInfo{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        bloomExtractInfo.renderArea           = {{0, 0}, vkbSwapchain.extent};
+        bloomExtractInfo.renderArea           = {{0, 0}, sc.extent};
         bloomExtractInfo.layerCount           = 1;
         bloomExtractInfo.colorAttachmentCount = 1;
         bloomExtractInfo.pColorAttachments    = &bloomExtractAttach;
@@ -1261,7 +1259,7 @@ int main() {
         bloomBlurAttachB.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
 
         VkRenderingInfo bloomBlurInfoB{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        bloomBlurInfoB.renderArea           = {{0, 0}, vkbSwapchain.extent};
+        bloomBlurInfoB.renderArea           = {{0, 0}, sc.extent};
         bloomBlurInfoB.layerCount           = 1;
         bloomBlurInfoB.colorAttachmentCount = 1;
         bloomBlurInfoB.pColorAttachments    = &bloomBlurAttachB;
@@ -1302,7 +1300,7 @@ int main() {
         bloomBlurAttachA.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
 
         VkRenderingInfo bloomBlurInfoA{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        bloomBlurInfoA.renderArea           = {{0, 0}, vkbSwapchain.extent};
+        bloomBlurInfoA.renderArea           = {{0, 0}, sc.extent};
         bloomBlurInfoA.layerCount           = 1;
         bloomBlurInfoA.colorAttachmentCount = 1;
         bloomBlurInfoA.pColorAttachments    = &bloomBlurAttachA;
@@ -1341,7 +1339,7 @@ int main() {
         compositeAttach.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
 
         VkRenderingInfo compositeInfo{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        compositeInfo.renderArea           = {{0, 0}, vkbSwapchain.extent};
+        compositeInfo.renderArea           = {{0, 0}, sc.extent};
         compositeInfo.layerCount           = 1;
         compositeInfo.colorAttachmentCount = 1;
         compositeInfo.pColorAttachments    = &compositeAttach;
@@ -1387,7 +1385,7 @@ int main() {
         VkImageCopy sceneCopy{};
         sceneCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         sceneCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        sceneCopy.extent         = {vkbSwapchain.extent.width, vkbSwapchain.extent.height, 1};
+        sceneCopy.extent         = {sc.extent.width, sc.extent.height, 1};
         vkCmdCopyImage(frame.cmd,
                        hdrScene.image,      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        sceneCapture.image,  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -1427,7 +1425,7 @@ int main() {
         presentInfo.waitSemaphoreCount = 1;
         presentInfo.pWaitSemaphores    = &frame.renderFinished;
         presentInfo.swapchainCount     = 1;
-        presentInfo.pSwapchains        = &vkbSwapchain.swapchain;
+        presentInfo.pSwapchains        = &sc.swapchain;
         presentInfo.pImageIndices      = &imageIndex;
         VK_CHECK(vkQueuePresentKHR(graphicsQueue, &presentInfo));
 
@@ -1501,8 +1499,7 @@ int main() {
         vmaDestroyImage(allocator, target->image, target->allocation);
     }
 
-    vkbSwapchain.destroy_image_views(scViews);
-    vkb::destroy_swapchain(vkbSwapchain);
+    forfun::destroySwapchain(gpu, sc);
 
     // forfun::destroyDevice handles allocator, device, surface, debug
     // messenger, and instance in the right order.

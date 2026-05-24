@@ -81,6 +81,7 @@ add_library(forfun_core STATIC
     src/material.cpp
     src/material_instance.cpp
     src/device.cpp
+    src/swapchain.cpp
     src/vma_impl.cpp
     src/tinygltf_impl.cpp
 )
