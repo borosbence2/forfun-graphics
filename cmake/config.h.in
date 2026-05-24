@@ -4,18 +4,18 @@
 
 namespace cfg {
 
-constexpr const char* kAssetsDir          = "@CMAKE_SOURCE_DIR@/assets";
+constexpr const char* kAssetsDir          = "@CMAKE_CURRENT_SOURCE_DIR@/assets";
 constexpr const char* kHelmetModelPath    = "@HELMET_MODEL_PATH@";
 constexpr const char* kEnvHdrPath         = "@ENV_HDR_PATH@";
-constexpr const char* kHelmetFpkgPath     = "@CMAKE_SOURCE_DIR@/materials/damaged_helmet.fpkg";
-constexpr const char* kHelmetMatPath      = "@CMAKE_SOURCE_DIR@/materials/damaged_helmet.mat";
-constexpr const char* kUnlitFpkgPath      = "@CMAKE_SOURCE_DIR@/materials/unlit_test.fpkg";
-constexpr const char* kUnlitMatPath       = "@CMAKE_SOURCE_DIR@/materials/unlit_test.mat";
-constexpr const char* kRefractionFpkgPath = "@CMAKE_SOURCE_DIR@/materials/refraction_test.fpkg";
-constexpr const char* kRefractionMatPath  = "@CMAKE_SOURCE_DIR@/materials/refraction_test.mat";
-constexpr const char* kClothFpkgPath      = "@CMAKE_SOURCE_DIR@/materials/cloth_test.fpkg";
-constexpr const char* kClothMatPath       = "@CMAKE_SOURCE_DIR@/materials/cloth_test.mat";
-constexpr const char* kSubsurfFpkgPath    = "@CMAKE_SOURCE_DIR@/materials/subsurface_test.fpkg";
-constexpr const char* kSubsurfMatPath     = "@CMAKE_SOURCE_DIR@/materials/subsurface_test.mat";
+constexpr const char* kHelmetFpkgPath     = "@CMAKE_CURRENT_SOURCE_DIR@/materials/damaged_helmet.fpkg";
+constexpr const char* kHelmetMatPath      = "@CMAKE_CURRENT_SOURCE_DIR@/materials/damaged_helmet.mat";
+constexpr const char* kUnlitFpkgPath      = "@CMAKE_CURRENT_SOURCE_DIR@/materials/unlit_test.fpkg";
+constexpr const char* kUnlitMatPath       = "@CMAKE_CURRENT_SOURCE_DIR@/materials/unlit_test.mat";
+constexpr const char* kRefractionFpkgPath = "@CMAKE_CURRENT_SOURCE_DIR@/materials/refraction_test.fpkg";
+constexpr const char* kRefractionMatPath  = "@CMAKE_CURRENT_SOURCE_DIR@/materials/refraction_test.mat";
+constexpr const char* kClothFpkgPath      = "@CMAKE_CURRENT_SOURCE_DIR@/materials/cloth_test.fpkg";
+constexpr const char* kClothMatPath       = "@CMAKE_CURRENT_SOURCE_DIR@/materials/cloth_test.mat";
+constexpr const char* kSubsurfFpkgPath    = "@CMAKE_CURRENT_SOURCE_DIR@/materials/subsurface_test.fpkg";
+constexpr const char* kSubsurfMatPath     = "@CMAKE_CURRENT_SOURCE_DIR@/materials/subsurface_test.mat";
 
 } // namespace cfg
