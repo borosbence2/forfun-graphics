@@ -35,6 +35,7 @@
 #include "material_instance.h"
 #include "device.h"
 #include "swapchain.h"
+#include "frame_context.h"
 
 #include "post.vert.h"
 #include "bloom_extract.frag.h"
@@ -88,14 +89,10 @@ struct MaterialUiState {
 };
 
 struct Frame {
-    VkCommandPool   pool           = VK_NULL_HANDLE;
-    VkCommandBuffer cmd            = VK_NULL_HANDLE;
-    VkSemaphore     imageAvailable = VK_NULL_HANDLE;
-    VkSemaphore     renderFinished = VK_NULL_HANDLE;
-    VkFence         inFlight       = VK_NULL_HANDLE;
-    Buffer          ubo;
-    Buffer          lightingUbo;
-    Buffer          pointLightsUbo;
+    forfun::FrameContext fc;             // engine: pool + cmd + semaphores + fence
+    Buffer               ubo;             // demo: per-frame uniform buffers
+    Buffer               lightingUbo;
+    Buffer               pointLightsUbo;
 };
 
 } // namespace
@@ -615,31 +612,13 @@ int main() {
     // ---- Per-frame data ----
     std::array<Frame, kFramesInFlight> frames{};
     for (auto& f : frames) {
-        VkCommandPoolCreateInfo framePoolCi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-        framePoolCi.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        framePoolCi.queueFamilyIndex = graphicsFamily;
-        VK_CHECK(vkCreateCommandPool(device, &framePoolCi, nullptr, &f.pool));
-
-        VkCommandBufferAllocateInfo cbAi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        cbAi.commandPool        = f.pool;
-        cbAi.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cbAi.commandBufferCount = 1;
-        VK_CHECK(vkAllocateCommandBuffers(device, &cbAi, &f.cmd));
-
-        VkSemaphoreCreateInfo semCi{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-        VK_CHECK(vkCreateSemaphore(device, &semCi, nullptr, &f.imageAvailable));
-        VK_CHECK(vkCreateSemaphore(device, &semCi, nullptr, &f.renderFinished));
-
-        VkFenceCreateInfo fenceCi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        fenceCi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-        VK_CHECK(vkCreateFence(device, &fenceCi, nullptr, &f.inFlight));
-
-        f.ubo = createBufferHostMapped(allocator, sizeof(UBO),
-                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        f.fc = forfun::createFrameContext(gpu);
+        f.ubo            = createBufferHostMapped(allocator, sizeof(UBO),
+                                                  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         f.pointLightsUbo = createBufferHostMapped(allocator, sizeof(PointLightsUBO),
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
-        f.lightingUbo = createBufferHostMapped(allocator, sizeof(LightingUBO),
-                                               VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+                                                  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        f.lightingUbo    = createBufferHostMapped(allocator, sizeof(LightingUBO),
+                                                  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     }
 
     // ---- Skybox descriptor sets (one per frame, sharing camera UBO) ----
@@ -931,8 +910,8 @@ int main() {
 
         Frame& frame = frames[frameIndex];
 
-        VK_CHECK(vkWaitForFences(device, 1, &frame.inFlight, VK_TRUE, UINT64_MAX));
-        VK_CHECK(vkResetFences(device, 1, &frame.inFlight));
+        VK_CHECK(vkWaitForFences(device, 1, &frame.fc.inFlight, VK_TRUE, UINT64_MAX));
+        VK_CHECK(vkResetFences(device, 1, &frame.fc.inFlight));
 
         float activeYaw = materialUi.camYaw;
         if (materialUi.orbitCamera) {
@@ -1054,16 +1033,16 @@ int main() {
 
         uint32_t imageIndex = 0;
         VK_CHECK(vkAcquireNextImageKHR(device, sc.swapchain, UINT64_MAX,
-                                       frame.imageAvailable, VK_NULL_HANDLE, &imageIndex));
+                                       frame.fc.imageAvailable, VK_NULL_HANDLE, &imageIndex));
 
-        VK_CHECK(vkResetCommandBuffer(frame.cmd, 0));
+        VK_CHECK(vkResetCommandBuffer(frame.fc.cmd, 0));
         VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        VK_CHECK(vkBeginCommandBuffer(frame.cmd, &beginInfo));
+        VK_CHECK(vkBeginCommandBuffer(frame.fc.cmd, &beginInfo));
 
         VkDeviceSize vbOffset = 0;
         if (materialUi.shadowsEnabled && !materialUi.shadowsBaked) {
-            transitionImage(frame.cmd, shadowMap.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+            transitionImage(frame.fc.cmd, shadowMap.image, VK_IMAGE_ASPECT_DEPTH_BIT,
                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                             VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
@@ -1083,7 +1062,7 @@ int main() {
             shadowRenderInfo.layerCount       = 1;
             shadowRenderInfo.pDepthAttachment = &shadowDepthAttach;
 
-            vkCmdBeginRendering(frame.cmd, &shadowRenderInfo);
+            vkCmdBeginRendering(frame.fc.cmd, &shadowRenderInfo);
 
             VkViewport shadowViewport{};
             shadowViewport.x        = 0.0f;
@@ -1092,32 +1071,32 @@ int main() {
             shadowViewport.height   = static_cast<float>(kShadowMapSize);
             shadowViewport.minDepth = 0.0f;
             shadowViewport.maxDepth = 1.0f;
-            vkCmdSetViewport(frame.cmd, 0, 1, &shadowViewport);
+            vkCmdSetViewport(frame.fc.cmd, 0, 1, &shadowViewport);
 
             VkRect2D shadowScissor{{0, 0}, {kShadowMapSize, kShadowMapSize}};
-            vkCmdSetScissor(frame.cmd, 0, 1, &shadowScissor);
-            vkCmdSetDepthBias(frame.cmd, 1.25f, 0.0f, 1.75f);
+            vkCmdSetScissor(frame.fc.cmd, 0, 1, &shadowScissor);
+            vkCmdSetDepthBias(frame.fc.cmd, 1.25f, 0.0f, 1.75f);
 
             {
                 const uint32_t depthKey = mat::computeVariantKey(helmetPkg, true);
                 const glm::mat4 helmetModel(1.0f);
-                vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                vkCmdBindPipeline(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                   helmetMat.pipelineFor(depthKey));
-                vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                vkCmdBindDescriptorSets(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         helmetMat.pipelineLayout(), 0, 1,
                                         &matFrameSets[frameIndex], 0, nullptr);
-                helmetInst.bind(frame.cmd);
-                vkCmdPushConstants(frame.cmd, helmetMat.pipelineLayout(),
+                helmetInst.bind(frame.fc.cmd);
+                vkCmdPushConstants(frame.fc.cmd, helmetMat.pipelineLayout(),
                                    VK_SHADER_STAGE_VERTEX_BIT, 0,
                                    sizeof(glm::mat4), &helmetModel);
-                vkCmdBindVertexBuffers(frame.cmd, 0, 1, &helmetVB.buffer, &vbOffset);
-                vkCmdBindIndexBuffer(frame.cmd, helmetIB.buffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(frame.cmd, helmetIndexCount, 1, 0, 0, 0);
+                vkCmdBindVertexBuffers(frame.fc.cmd, 0, 1, &helmetVB.buffer, &vbOffset);
+                vkCmdBindIndexBuffer(frame.fc.cmd, helmetIB.buffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(frame.fc.cmd, helmetIndexCount, 1, 0, 0, 0);
             }
 
-            vkCmdEndRendering(frame.cmd);
+            vkCmdEndRendering(frame.fc.cmd);
 
-            transitionImage(frame.cmd, shadowMap.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+            transitionImage(frame.fc.cmd, shadowMap.image, VK_IMAGE_ASPECT_DEPTH_BIT,
                             VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
@@ -1126,13 +1105,13 @@ int main() {
                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
         }
 
-        transitionImage(frame.cmd, hdrScene.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, hdrScene.image, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 
-        transitionImage(frame.cmd, depthImage.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+        transitionImage(frame.fc.cmd, depthImage.image, VK_IMAGE_ASPECT_DEPTH_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
@@ -1160,7 +1139,7 @@ int main() {
         renderInfo.pColorAttachments    = &colorAttach;
         renderInfo.pDepthAttachment     = &depthAttach;
 
-        vkCmdBeginRendering(frame.cmd, &renderInfo);
+        vkCmdBeginRendering(frame.fc.cmd, &renderInfo);
 
         VkViewport viewport{};
         viewport.x        = 0.0f;
@@ -1169,37 +1148,37 @@ int main() {
         viewport.height   = static_cast<float>(sc.extent.height);
         viewport.minDepth = 0.0f;
         viewport.maxDepth = 1.0f;
-        vkCmdSetViewport(frame.cmd, 0, 1, &viewport);
+        vkCmdSetViewport(frame.fc.cmd, 0, 1, &viewport);
 
         VkRect2D scissor{{0, 0}, sc.extent};
-        vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
+        vkCmdSetScissor(frame.fc.cmd, 0, 1, &scissor);
 
         {
             const uint32_t colorKey = mat::computeVariantKey(helmetPkg, false);
             const glm::mat4 helmetModel(1.0f);
-            vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            vkCmdBindPipeline(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               helmetMat.pipelineFor(colorKey));
-            vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            vkCmdBindDescriptorSets(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     helmetMat.pipelineLayout(), 0, 1,
                                     &matFrameSets[frameIndex], 0, nullptr);
-            helmetInst.bind(frame.cmd);
-            vkCmdPushConstants(frame.cmd, helmetMat.pipelineLayout(),
+            helmetInst.bind(frame.fc.cmd);
+            vkCmdPushConstants(frame.fc.cmd, helmetMat.pipelineLayout(),
                                VK_SHADER_STAGE_VERTEX_BIT, 0,
                                sizeof(glm::mat4), &helmetModel);
-            vkCmdBindVertexBuffers(frame.cmd, 0, 1, &helmetVB.buffer, &vbOffset);
-            vkCmdBindIndexBuffer(frame.cmd, helmetIB.buffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(frame.cmd, helmetIndexCount, 1, 0, 0, 0);
+            vkCmdBindVertexBuffers(frame.fc.cmd, 0, 1, &helmetVB.buffer, &vbOffset);
+            vkCmdBindIndexBuffer(frame.fc.cmd, helmetIB.buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(frame.fc.cmd, helmetIndexCount, 1, 0, 0, 0);
         }
 
         // Skybox last so opaque mesh fragments early-Z reject the fullscreen triangle.
-        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline);
-        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        vkCmdBindPipeline(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline);
+        vkCmdBindDescriptorSets(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 skyboxPipelineLayout, 0, 1, &skyboxSets[frameIndex], 0, nullptr);
-        vkCmdDraw(frame.cmd, 3, 1, 0, 0);
+        vkCmdDraw(frame.fc.cmd, 3, 1, 0, 0);
 
-        vkCmdEndRendering(frame.cmd);
+        vkCmdEndRendering(frame.fc.cmd);
 
-        transitionImage(frame.cmd, hdrScene.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, hdrScene.image, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -1207,7 +1186,7 @@ int main() {
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-        transitionImage(frame.cmd, bloomA.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, bloomA.image, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -1226,18 +1205,18 @@ int main() {
         bloomExtractInfo.colorAttachmentCount = 1;
         bloomExtractInfo.pColorAttachments    = &bloomExtractAttach;
 
-        vkCmdBeginRendering(frame.cmd, &bloomExtractInfo);
-        vkCmdSetViewport(frame.cmd, 0, 1, &viewport);
-        vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
-        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomExtractPipeline);
-        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        vkCmdBeginRendering(frame.fc.cmd, &bloomExtractInfo);
+        vkCmdSetViewport(frame.fc.cmd, 0, 1, &viewport);
+        vkCmdSetScissor(frame.fc.cmd, 0, 1, &scissor);
+        vkCmdBindPipeline(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomExtractPipeline);
+        vkCmdBindDescriptorSets(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 extractLayout, 0, 1, &extractSet, 0, nullptr);
-        vkCmdPushConstants(frame.cmd, extractLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+        vkCmdPushConstants(frame.fc.cmd, extractLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(float), &materialUi.bloomThreshold);
-        vkCmdDraw(frame.cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(frame.cmd);
+        vkCmdDraw(frame.fc.cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(frame.fc.cmd);
 
-        transitionImage(frame.cmd, bloomA.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, bloomA.image, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -1245,7 +1224,7 @@ int main() {
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-        transitionImage(frame.cmd, bloomB.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, bloomB.image, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -1264,19 +1243,19 @@ int main() {
         bloomBlurInfoB.colorAttachmentCount = 1;
         bloomBlurInfoB.pColorAttachments    = &bloomBlurAttachB;
 
-        vkCmdBeginRendering(frame.cmd, &bloomBlurInfoB);
-        vkCmdSetViewport(frame.cmd, 0, 1, &viewport);
-        vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
-        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomBlurPipeline);
-        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        vkCmdBeginRendering(frame.fc.cmd, &bloomBlurInfoB);
+        vkCmdSetViewport(frame.fc.cmd, 0, 1, &viewport);
+        vkCmdSetScissor(frame.fc.cmd, 0, 1, &scissor);
+        vkCmdBindPipeline(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomBlurPipeline);
+        vkCmdBindDescriptorSets(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 blurLayout, 0, 1, &blurSetA, 0, nullptr);
         const glm::vec2 blurHorizontal(1.0f, 0.0f);
-        vkCmdPushConstants(frame.cmd, blurLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+        vkCmdPushConstants(frame.fc.cmd, blurLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(glm::vec2), &blurHorizontal);
-        vkCmdDraw(frame.cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(frame.cmd);
+        vkCmdDraw(frame.fc.cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(frame.fc.cmd);
 
-        transitionImage(frame.cmd, bloomB.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, bloomB.image, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -1284,7 +1263,7 @@ int main() {
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-        transitionImage(frame.cmd, bloomA.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, bloomA.image, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
@@ -1305,19 +1284,19 @@ int main() {
         bloomBlurInfoA.colorAttachmentCount = 1;
         bloomBlurInfoA.pColorAttachments    = &bloomBlurAttachA;
 
-        vkCmdBeginRendering(frame.cmd, &bloomBlurInfoA);
-        vkCmdSetViewport(frame.cmd, 0, 1, &viewport);
-        vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
-        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomBlurPipeline);
-        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        vkCmdBeginRendering(frame.fc.cmd, &bloomBlurInfoA);
+        vkCmdSetViewport(frame.fc.cmd, 0, 1, &viewport);
+        vkCmdSetScissor(frame.fc.cmd, 0, 1, &scissor);
+        vkCmdBindPipeline(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomBlurPipeline);
+        vkCmdBindDescriptorSets(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 blurLayout, 0, 1, &blurSetB, 0, nullptr);
         const glm::vec2 blurVertical(0.0f, 1.0f);
-        vkCmdPushConstants(frame.cmd, blurLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+        vkCmdPushConstants(frame.fc.cmd, blurLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(glm::vec2), &blurVertical);
-        vkCmdDraw(frame.cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(frame.cmd);
+        vkCmdDraw(frame.fc.cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(frame.fc.cmd);
 
-        transitionImage(frame.cmd, bloomA.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, bloomA.image, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -1325,7 +1304,7 @@ int main() {
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-        transitionImage(frame.cmd, scImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, scImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -1344,23 +1323,23 @@ int main() {
         compositeInfo.colorAttachmentCount = 1;
         compositeInfo.pColorAttachments    = &compositeAttach;
 
-        vkCmdBeginRendering(frame.cmd, &compositeInfo);
-        vkCmdSetViewport(frame.cmd, 0, 1, &viewport);
-        vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
-        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline);
-        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        vkCmdBeginRendering(frame.fc.cmd, &compositeInfo);
+        vkCmdSetViewport(frame.fc.cmd, 0, 1, &viewport);
+        vkCmdSetScissor(frame.fc.cmd, 0, 1, &scissor);
+        vkCmdBindPipeline(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline);
+        vkCmdBindDescriptorSets(frame.fc.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 compositeLayout, 0, 1, &compositeSet, 0, nullptr);
         const CompositePushData compositePush{
             materialUi.exposure,
             materialUi.bloomStrength
         };
-        vkCmdPushConstants(frame.cmd, compositeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+        vkCmdPushConstants(frame.fc.cmd, compositeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(CompositePushData), &compositePush);
-        vkCmdDraw(frame.cmd, 3, 1, 0, 0);
-        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), frame.cmd);
-        vkCmdEndRendering(frame.cmd);
+        vkCmdDraw(frame.fc.cmd, 3, 1, 0, 0);
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), frame.fc.cmd);
+        vkCmdEndRendering(frame.fc.cmd);
 
-        transitionImage(frame.cmd, scImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, scImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -1368,14 +1347,14 @@ int main() {
                         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
 
         // Copy hdrScene → sceneCapture for next-frame screen-space refraction (1-frame latency).
-        transitionImage(frame.cmd, hdrScene.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, hdrScene.image, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                         VK_ACCESS_2_TRANSFER_READ_BIT);
-        transitionImage(frame.cmd, sceneCapture.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, sceneCapture.image, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
@@ -1386,11 +1365,11 @@ int main() {
         sceneCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         sceneCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         sceneCopy.extent         = {sc.extent.width, sc.extent.height, 1};
-        vkCmdCopyImage(frame.cmd,
+        vkCmdCopyImage(frame.fc.cmd,
                        hdrScene.image,      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        sceneCapture.image,  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &sceneCopy);
-        transitionImage(frame.cmd, sceneCapture.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(frame.fc.cmd, sceneCapture.image, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -1398,17 +1377,17 @@ int main() {
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-        VK_CHECK(vkEndCommandBuffer(frame.cmd));
+        VK_CHECK(vkEndCommandBuffer(frame.fc.cmd));
 
         VkCommandBufferSubmitInfo cbInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-        cbInfo.commandBuffer = frame.cmd;
+        cbInfo.commandBuffer = frame.fc.cmd;
 
         VkSemaphoreSubmitInfo waitInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-        waitInfo.semaphore = frame.imageAvailable;
+        waitInfo.semaphore = frame.fc.imageAvailable;
         waitInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 
         VkSemaphoreSubmitInfo signalInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-        signalInfo.semaphore = frame.renderFinished;
+        signalInfo.semaphore = frame.fc.renderFinished;
         signalInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 
         VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
@@ -1419,11 +1398,11 @@ int main() {
         submit.signalSemaphoreInfoCount = 1;
         submit.pSignalSemaphoreInfos    = &signalInfo;
 
-        VK_CHECK(vkQueueSubmit2(graphicsQueue, 1, &submit, frame.inFlight));
+        VK_CHECK(vkQueueSubmit2(graphicsQueue, 1, &submit, frame.fc.inFlight));
 
         VkPresentInfoKHR presentInfo{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores    = &frame.renderFinished;
+        presentInfo.pWaitSemaphores    = &frame.fc.renderFinished;
         presentInfo.swapchainCount     = 1;
         presentInfo.pSwapchains        = &sc.swapchain;
         presentInfo.pImageIndices      = &imageIndex;
@@ -1441,12 +1420,9 @@ int main() {
 
     for (auto& f : frames) {
         vmaDestroyBuffer(allocator, f.pointLightsUbo.buffer, f.pointLightsUbo.allocation);
-        vmaDestroyBuffer(allocator, f.lightingUbo.buffer, f.lightingUbo.allocation);
-        vmaDestroyBuffer(allocator, f.ubo.buffer, f.ubo.allocation);
-        vkDestroyFence(device, f.inFlight, nullptr);
-        vkDestroySemaphore(device, f.renderFinished, nullptr);
-        vkDestroySemaphore(device, f.imageAvailable, nullptr);
-        vkDestroyCommandPool(device, f.pool, nullptr);
+        vmaDestroyBuffer(allocator, f.lightingUbo.buffer,    f.lightingUbo.allocation);
+        vmaDestroyBuffer(allocator, f.ubo.buffer,            f.ubo.allocation);
+        forfun::destroyFrameContext(gpu, f.fc);
     }
 
     helmetInst.destroy();
