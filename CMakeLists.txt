@@ -80,6 +80,7 @@ add_library(forfun_core STATIC
     src/material_package.cpp
     src/material.cpp
     src/material_instance.cpp
+    src/device.cpp
     src/vma_impl.cpp
     src/tinygltf_impl.cpp
 )
@@ -96,6 +97,8 @@ target_link_libraries(forfun_core
         Vulkan::Vulkan
         GPUOpen::VulkanMemoryAllocator
         glm::glm
+    PRIVATE
+        vk-bootstrap::vk-bootstrap   # device.cpp uses vkb::InstanceBuilder etc.
 )
 
 # IBL precompute shaders are embedded into the library (ibl.cpp #includes them).

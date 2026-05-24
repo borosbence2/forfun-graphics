@@ -33,6 +33,7 @@
 #include "material_package.h"
 #include "material.h"
 #include "material_instance.h"
+#include "device.h"
 
 #include "post.vert.h"
 #include "bloom_extract.frag.h"
@@ -170,68 +171,27 @@ int main() {
     }
     MaterialUiState materialUi{};
 
-    // ---- Instance ----
-    auto instanceResult = vkb::InstanceBuilder{}
-        .set_app_name(kAppName)
-        .require_api_version(1, 3, 0)
-        .request_validation_layers(true)
-        .use_default_debug_messenger()
-        .build();
-    if (!instanceResult) {
-        std::fprintf(stderr, "Instance: %s\n", instanceResult.error().message().c_str());
-        return EXIT_FAILURE;
-    }
-    vkb::Instance vkbInstance = instanceResult.value();
-
-    VkSurfaceKHR surface = VK_NULL_HANDLE;
-    VK_CHECK(glfwCreateWindowSurface(vkbInstance.instance, window, nullptr, &surface));
-
-    // ---- Device ----
-    VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
-    f13.dynamicRendering = VK_TRUE;
-    f13.synchronization2 = VK_TRUE;
-
-    VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-    f12.timelineSemaphore               = VK_TRUE;
-    f12.bufferDeviceAddress             = VK_TRUE;
-    f12.descriptorIndexing              = VK_TRUE;
-    f12.runtimeDescriptorArray          = VK_TRUE;
-    f12.descriptorBindingPartiallyBound = VK_TRUE;
-
-    auto physResult = vkb::PhysicalDeviceSelector{vkbInstance}
-        .set_minimum_version(1, 3)
-        .set_required_features_13(f13)
-        .set_required_features_12(f12)
-        .set_surface(surface)
-        .select();
-    if (!physResult) {
-        std::fprintf(stderr, "PhysicalDevice: %s\n", physResult.error().message().c_str());
-        return EXIT_FAILURE;
-    }
-
-    auto deviceResult = vkb::DeviceBuilder{physResult.value()}.build();
-    if (!deviceResult) {
-        std::fprintf(stderr, "Device: %s\n", deviceResult.error().message().c_str());
-        return EXIT_FAILURE;
-    }
-    vkb::Device vkbDevice   = deviceResult.value();
-    VkDevice         device         = vkbDevice.device;
-    VkPhysicalDevice physicalDevice = vkbDevice.physical_device;
-    VkQueue          graphicsQueue  = vkbDevice.get_queue(vkb::QueueType::graphics).value();
-    uint32_t         graphicsFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
-
-    // ---- VMA allocator ----
-    VmaAllocatorCreateInfo allocatorCi{};
-    allocatorCi.physicalDevice   = physicalDevice;
-    allocatorCi.device           = device;
-    allocatorCi.instance         = vkbInstance.instance;
-    allocatorCi.vulkanApiVersion = VK_API_VERSION_1_3;
-    allocatorCi.flags            = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-    VmaAllocator allocator = VK_NULL_HANDLE;
-    VK_CHECK(vmaCreateAllocator(&allocatorCi, &allocator));
+    // ---- Device (instance + surface + physical + logical + queues + VMA) ----
+    forfun::Device gpu = forfun::createDevice({
+        .appName          = kAppName,
+        .enableValidation = true,
+        .createSurface    = [window](VkInstance inst) {
+            VkSurfaceKHR s = VK_NULL_HANDLE;
+            VK_CHECK(glfwCreateWindowSurface(inst, window, nullptr, &s));
+            return s;
+        },
+    });
+    // Aliases — keep the rest of main.cpp readable without touching every line.
+    VkInstance       instance       = gpu.instance;
+    VkSurfaceKHR     surface        = gpu.surface;
+    VkPhysicalDevice physicalDevice = gpu.physicalDevice;
+    VkDevice         device         = gpu.device;
+    VkQueue          graphicsQueue  = gpu.graphicsQueue;
+    uint32_t         graphicsFamily = gpu.graphicsFamily;
+    VmaAllocator     allocator      = gpu.allocator;
 
     // ---- Swapchain ----
-    auto swapResult = vkb::SwapchainBuilder{vkbDevice}
+    auto swapResult = vkb::SwapchainBuilder{physicalDevice, device, surface, graphicsFamily}
         .set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
         .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
         .set_desired_extent(kWindowWidth, kWindowHeight)
@@ -587,7 +547,7 @@ int main() {
     imguiRenderingInfo.pColorAttachmentFormats = &vkbSwapchain.image_format;
 
     ImGui_ImplVulkan_InitInfo imguiInitInfo{};
-    imguiInitInfo.Instance = vkbInstance.instance;
+    imguiInitInfo.Instance = instance;
     imguiInitInfo.PhysicalDevice = physicalDevice;
     imguiInitInfo.Device = device;
     imguiInitInfo.QueueFamily = graphicsFamily;
@@ -1544,11 +1504,9 @@ int main() {
     vkbSwapchain.destroy_image_views(scViews);
     vkb::destroy_swapchain(vkbSwapchain);
 
-    vmaDestroyAllocator(allocator);
-
-    vkb::destroy_device(vkbDevice);
-    vkDestroySurfaceKHR(vkbInstance.instance, surface, nullptr);
-    vkb::destroy_instance(vkbInstance);
+    // forfun::destroyDevice handles allocator, device, surface, debug
+    // messenger, and instance in the right order.
+    forfun::destroyDevice(gpu);
 
     glfwDestroyWindow(window);
     glfwTerminate();
